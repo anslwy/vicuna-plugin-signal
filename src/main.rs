@@ -524,6 +524,7 @@ impl AppState {
         let stdout = child.stdout.take().ok_or("signal-cli missing stdout")?;
         let stderr = child.stderr.take().ok_or("signal-cli missing stderr")?;
 
+        let bin_label = bin.display().to_string();
         let (tx, mut rx) = mpsc::unbounded_channel::<String>();
         let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>> =
             Arc::new(Mutex::new(HashMap::new()));
@@ -542,13 +543,22 @@ impl AppState {
                 }
             });
 
-            let state_stderr = state_err.clone();
+            // Keep the last stderr lines: when signal-cli dies at startup (Java,
+            // native lib, config), its own output is the only explanation.
+            let tail: Arc<std::sync::Mutex<VecDeque<String>>> = Arc::new(std::sync::Mutex::new(VecDeque::new()));
+            let tail_w = tail.clone();
             let err_reader = tokio::spawn(async move {
                 let mut lines = BufReader::new(stderr).lines();
                 while let Ok(Some(l)) = lines.next_line().await {
                     let trimmed = l.trim();
-                    if !trimmed.is_empty() && (trimmed.contains("ERROR") || trimmed.contains("Exception") || trimmed.contains("Failed")) {
-                        *state_stderr.last_error.lock().await = trimmed.chars().take(300).collect();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    if let Ok(mut t) = tail_w.lock() {
+                        if t.len() == 12 {
+                            t.pop_front();
+                        }
+                        t.push_back(trimmed.chars().take(300).collect());
                     }
                 }
             });
@@ -584,11 +594,23 @@ impl AppState {
             }
 
             writer.abort();
-            err_reader.abort();
+            let status = tokio::time::timeout(Duration::from_secs(3), child.wait()).await;
+            let _ = tokio::time::timeout(Duration::from_secs(1), err_reader).await;
             let _ = child.kill().await;
+            let code = match status {
+                Ok(Ok(s)) => s.code().map(|c| format!(" (exit {c})")).unwrap_or_default(),
+                _ => String::new(),
+            };
+            let lines: Vec<String> = tail.lock().map(|t| t.iter().cloned().collect()).unwrap_or_default();
+            let msg = if lines.is_empty() {
+                format!("signal-cli ({}) stopped{code} without saying why.", bin_label)
+            } else {
+                format!("signal-cli ({}) stopped{code}: {}", bin_label, lines.join(" | "))
+            };
+            *state_err.last_error.lock().await = msg.clone();
             let mut p = pending_read.lock().await;
             for (_, tx) in p.drain() {
-                let _ = tx.send(Err("signal-cli daemon exited".into()));
+                let _ = tx.send(Err(msg.clone()));
             }
         });
 

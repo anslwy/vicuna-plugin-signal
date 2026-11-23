@@ -1,6 +1,6 @@
 [package]
 name = "vicuna-bridge-signal"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 description = "Signal bridge plugin for Vicuna via signal-cli"
 
