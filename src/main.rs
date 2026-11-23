@@ -79,6 +79,10 @@ struct SessionBridge {
 struct Store {
     #[serde(default)]
     account: Option<String>,
+    /// True when `account` was registered by the plugin as its own number
+    /// (a dedicated "Vicuna" contact) rather than linked to the user's account.
+    #[serde(default)]
+    registered: bool,
     #[serde(default)]
     sessions: HashMap<String, SessionBridge>,
 }
@@ -132,6 +136,82 @@ fn save_store(path: &Path, store: &Store) -> Result<(), String> {
     }
     std::fs::rename(&tmp, path).map_err(|e| format!("rename {}: {e}", path.display()))?;
     Ok(())
+}
+
+// ---------- Register mode (dedicated bot number) ----------
+
+fn input_prompt(reg: &RegState) -> Value {
+    match reg {
+        RegState::Idle => json!({
+            "label": format!("To give Vicuna its own Signal number, enter that number with its country code and a CAPTCHA link from {CAPTCHA_URL}, separated by a space. To link your own Signal account with a QR code instead, type link."),
+            "placeholder": "+15551234567 signalcaptcha://…",
+            "submitLabel": "Continue",
+        }),
+        RegState::AwaitingCode { number, .. } => json!({
+            "label": format!("Enter the 6-digit code Signal sent by SMS to {number}. Add the registration-lock PIN after it if the number has one, or type voice to get a phone call instead."),
+            "placeholder": "123456",
+            "submitLabel": "Verify",
+        }),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RegState {
+    Idle,
+    AwaitingCode { number: String, captcha: String },
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum RegInput {
+    Link,
+    Register { number: String, captcha: String },
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum CodeInput {
+    Voice,
+    Code { code: String, pin: Option<String> },
+}
+
+const CAPTCHA_URL: &str = "https://signalcaptchas.org/registration/generate.html";
+
+/// `+15551234567 signalcaptcha://…` (either order, number may contain spaces/dashes) or `link`.
+fn parse_register_input(s: &str) -> Result<RegInput, String> {
+    let s = s.trim();
+    if s.eq_ignore_ascii_case("link") || s.eq_ignore_ascii_case("qr") {
+        return Ok(RegInput::Link);
+    }
+    let mut captcha = None;
+    let mut rest = String::new();
+    for tok in s.split_whitespace() {
+        if tok.starts_with("signalcaptcha://") {
+            captcha = Some(tok.to_string());
+        } else {
+            rest.push_str(tok);
+        }
+    }
+    let number: String = rest.chars().filter(|c| !matches!(c, '-' | '(' | ')' | '.')).collect();
+    let digits = number.strip_prefix('+').unwrap_or("");
+    if digits.len() < 8 || digits.len() > 15 || !digits.chars().all(|c| c.is_ascii_digit()) {
+        return Err("Enter the number with its country code, like +15551234567, followed by the CAPTCHA link.".into());
+    }
+    let captcha = captcha.ok_or_else(|| format!("Add the CAPTCHA link (signalcaptcha://…) from {CAPTCHA_URL} after the number."))?;
+    Ok(RegInput::Register { number, captcha })
+}
+
+/// `123456`, `123-456`, optionally followed by the registration-lock PIN, or `voice`.
+fn parse_code_input(s: &str) -> Result<CodeInput, String> {
+    let s = s.trim();
+    if s.eq_ignore_ascii_case("voice") || s.eq_ignore_ascii_case("call") {
+        return Ok(CodeInput::Voice);
+    }
+    let mut toks = s.split_whitespace();
+    let code: String = toks.next().unwrap_or("").chars().filter(|c| *c != '-').collect();
+    if code.len() != 6 || !code.chars().all(|c| c.is_ascii_digit()) {
+        return Err("Enter the 6-digit code from the SMS (or type voice to get a call).".into());
+    }
+    let pin = toks.next().map(str::to_string);
+    Ok(CodeInput::Code { code, pin })
 }
 
 fn random_pair_code() -> String {
@@ -334,6 +414,7 @@ struct AppState {
     host: Arc<HostRpc>,
     proc: Mutex<Option<Arc<SignalProc>>>,
     qr_data_url: Mutex<Option<String>>,
+    reg: Mutex<RegState>,
     last_error: Mutex<String>,
     linking_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     turns: Mutex<HashMap<String, ActiveTurn>>,
@@ -481,17 +562,79 @@ impl AppState {
         }
     }
 
-    async fn start_qr_link(self: &Arc<Self>, session_id: &str) -> Result<Value, String> {
-        // Ensure session entry exists immediately
+    async fn ensure_session(self: &Arc<Self>, session_id: &str) -> Result<(), String> {
+        let mut store = self.store.lock().await;
+        store.sessions.entry(session_id.to_string()).or_insert_with(|| SessionBridge {
+            enabled: true,
+            pair_code: random_pair_code(),
+            paired: None,
+        });
+        save_store(&self.cfg_path, &store)
+    }
+
+    /// `bridge_save` entry point: empty input = QR link (old behavior / Relink);
+    /// otherwise drives the register-a-number flow step by step.
+    async fn save_input(self: &Arc<Self>, session_id: &str, input: &str) -> Result<Value, String> {
+        self.ensure_session(session_id).await?;
+        if input.trim().is_empty() {
+            *self.reg.lock().await = RegState::Idle;
+            return self.start_qr_link(session_id).await;
+        }
+        let reg = self.reg.lock().await.clone();
+        let res = match reg {
+            RegState::AwaitingCode { number, captcha } => self.verify_step(&number, &captcha, input).await,
+            RegState::Idle => match parse_register_input(input) {
+                Ok(RegInput::Link) => return self.start_qr_link(session_id).await,
+                Ok(RegInput::Register { number, captcha }) => self.register_step(&number, &captcha, false).await,
+                Err(e) => Err(e),
+            },
+        };
+        // Step errors stay visible in the dialog; the prompt keeps asking.
+        *self.last_error.lock().await = res.err().unwrap_or_default();
+        Ok(self.status_for(session_id).await)
+    }
+
+    async fn register_step(self: &Arc<Self>, number: &str, captcha: &str, voice: bool) -> Result<(), String> {
+        let proc = self.ensure_daemon().await?;
+        proc.call(
+            "register",
+            json!({ "account": number, "captcha": captcha, "voice": voice }),
+            Duration::from_secs(60),
+        )
+        .await
+        .map_err(|e| format!("Signal refused the registration: {e}. CAPTCHA links expire quickly; get a fresh one and try again."))?;
+        *self.reg.lock().await = RegState::AwaitingCode { number: number.into(), captcha: captcha.into() };
+        Ok(())
+    }
+
+    async fn verify_step(self: &Arc<Self>, number: &str, captcha: &str, input: &str) -> Result<(), String> {
+        let (code, pin) = match parse_code_input(input)? {
+            CodeInput::Voice => return self.register_step(number, captcha, true).await,
+            CodeInput::Code { code, pin } => (code, pin),
+        };
+        let proc = self.ensure_daemon().await?;
+        let mut params = json!({ "account": number, "verificationCode": code });
+        if let Some(p) = pin {
+            params["pin"] = Value::String(p);
+        }
+        proc.call("verify", params, Duration::from_secs(60))
+            .await
+            .map_err(|e| format!("Verification failed: {e}. If the number has a registration lock, add its PIN after the code."))?;
+        let _ = proc
+            .call("updateProfile", json!({ "account": number, "givenName": "Vicuna" }), Duration::from_secs(30))
+            .await;
         {
             let mut store = self.store.lock().await;
-            store.sessions.entry(session_id.to_string()).or_insert_with(|| SessionBridge {
-                enabled: true,
-                pair_code: random_pair_code(),
-                paired: None,
-            });
+            store.account = Some(number.into());
+            store.registered = true;
             save_store(&self.cfg_path, &store)?;
         }
+        *self.reg.lock().await = RegState::Idle;
+        Ok(())
+    }
+
+    async fn start_qr_link(self: &Arc<Self>, session_id: &str) -> Result<Value, String> {
+        self.ensure_session(session_id).await?;
 
         // If already linked and not explicitly relinking, still allow refreshing QR when requested
         let proc = self.ensure_daemon().await?;
@@ -536,6 +679,7 @@ impl AppState {
                     if let Some(acc) = number {
                         let mut store = state.store.lock().await;
                         store.account = Some(acc);
+                        store.registered = false;
                         let _ = save_store(&state.cfg_path, &store);
                     }
                     *state.qr_data_url.lock().await = None;
@@ -565,7 +709,16 @@ impl AppState {
             .unwrap_or(false);
 
         let sess = store.sessions.get(session_id);
+        let reg = self.reg.lock().await.clone();
         let configured = sess.is_some() && (store.account.is_some() || qr.is_some());
+        let hint = if store.registered {
+            format!(
+                "Send this to {} in a direct message, or in a group with just you and that number:",
+                store.account.clone().unwrap_or_default()
+            )
+        } else {
+            "Send this in Note to Self or a solo Signal group:".to_string()
+        };
         let enabled = sess.map(|s| s.enabled).unwrap_or(false);
         let paired = sess.and_then(|s| s.paired.as_ref()).map(|p| {
             json!({
@@ -583,11 +736,13 @@ impl AppState {
             "paired": paired,
             "botUsername": store.account.clone().unwrap_or_default(),
             "pairCode": pair_code,
-            "pairingHint": "Send this in Note to Self or a solo Signal group:",
+            "pairingHint": hint,
             "lastError": last_error,
         });
         if let Some(q) = qr {
             obj["qrDataUrl"] = Value::String(q);
+        } else if store.account.is_none() {
+            obj["inputPrompt"] = input_prompt(&reg);
         }
         obj
     }
@@ -1311,7 +1466,8 @@ async fn handle_host_request(state: Arc<AppState>, method: &str, params: &Value)
             if sid.is_empty() {
                 return Err("missing sessionId".into());
             }
-            state.start_qr_link(sid).await
+            let input = params.get("token").and_then(Value::as_str).unwrap_or("");
+            state.save_input(sid, input).await
         }
         "bridge_set" => {
             if sid.is_empty() {
@@ -1348,6 +1504,10 @@ async fn handle_host_request(state: Arc<AppState>, method: &str, params: &Value)
                 let mut store = state.store.lock().await;
                 store.sessions.remove(sid);
                 save_store(&state.cfg_path, &store)?;
+                if store.account.is_none() {
+                    *state.reg.lock().await = RegState::Idle;
+                    *state.last_error.lock().await = String::new();
+                }
             }
             state.turns.lock().await.remove(sid);
             Ok(state.status_for(sid).await)
@@ -1422,6 +1582,7 @@ async fn main() {
         host: host.clone(),
         proc: Mutex::new(None),
         qr_data_url: Mutex::new(None),
+        reg: Mutex::new(RegState::Idle),
         last_error: Mutex::new(String::new()),
         linking_task: Mutex::new(None),
         turns: Mutex::new(HashMap::new()),
@@ -1627,5 +1788,39 @@ mod tests {
         tracker.record(42);
         assert!(tracker.contains(42));
         assert!(!tracker.contains(43));
+    }
+
+    #[test]
+    fn parses_register_input() {
+        assert_eq!(parse_register_input(" link "), Ok(RegInput::Link));
+        assert_eq!(
+            parse_register_input("+1 555-123-4567 signalcaptcha://abc.def"),
+            Ok(RegInput::Register { number: "+15551234567".into(), captcha: "signalcaptcha://abc.def".into() })
+        );
+        assert_eq!(
+            parse_register_input("signalcaptcha://x +447700900123"),
+            Ok(RegInput::Register { number: "+447700900123".into(), captcha: "signalcaptcha://x".into() })
+        );
+        assert!(parse_register_input("+15551234567").is_err());
+        assert!(parse_register_input("5551234567 signalcaptcha://x").is_err());
+        assert!(parse_register_input("+12 signalcaptcha://x").is_err());
+    }
+
+    #[test]
+    fn parses_code_input() {
+        assert_eq!(parse_code_input("voice"), Ok(CodeInput::Voice));
+        assert_eq!(parse_code_input("123-456"), Ok(CodeInput::Code { code: "123456".into(), pin: None }));
+        assert_eq!(parse_code_input("123456 9876"), Ok(CodeInput::Code { code: "123456".into(), pin: Some("9876".into()) }));
+        assert!(parse_code_input("12345").is_err());
+        assert!(parse_code_input("abcdef").is_err());
+    }
+
+    #[test]
+    fn input_prompt_follows_registration_step() {
+        let a = input_prompt(&RegState::Idle);
+        assert!(a["label"].as_str().unwrap().contains("type link"));
+        let b = input_prompt(&RegState::AwaitingCode { number: "+15551234567".into(), captcha: "c".into() });
+        assert!(b["label"].as_str().unwrap().contains("+15551234567"));
+        assert_eq!(b["submitLabel"], "Verify");
     }
 }

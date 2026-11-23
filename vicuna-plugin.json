@@ -1,7 +1,7 @@
 {
   "id": "signal",
   "name": "Signal",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Talk to any Vicuna Work session from Signal (Note to Self, solo groups, or DMs) via signal-cli, with QR linking, live progress, questions, attachments, and voice memos.",
   "bridge": {
     "name": "Signal",
@@ -15,10 +15,15 @@
         "linkUrl": "https://github.com/AsamK/signal-cli"
       },
       {
-        "text": "Click Link Signal device below to generate a QR code."
+        "text": "Separate Vicuna number (recommended, you get notifications): solve the CAPTCHA at",
+        "linkText": "signalcaptchas.org",
+        "linkUrl": "https://signalcaptchas.org/registration/generate.html"
       },
       {
-        "text": "In Signal on your phone, open Settings → Linked Devices → Link New Device and scan the QR code."
+        "text": "Enter the number and the copied signalcaptcha:// link below, then the SMS code."
+      },
+      {
+        "text": "Or type link to link your own account: scan the QR code in Signal \u2192 Settings \u2192 Linked Devices."
       }
     ],
     "pairCommand": "!pair",

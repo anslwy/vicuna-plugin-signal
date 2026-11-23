@@ -12,12 +12,26 @@ Install `signal-cli` and make sure it is available on your `PATH` (or set `SIGNA
 
 ## Setup
 
-1. Install this plugin in Vicuna (**Settings → Plugins → Install from GitHub**: `anslwy/vicuna-plugin-signal`, or install from a local folder after `cargo build --release`).
-2. Open any Work session, click the **Signal** bridge icon, and click **Link Signal device**.
-3. On your phone, open **Signal → Settings → Linked Devices → Link New Device** and scan the QR code.
-4. Once linked, send `!pair <code>` in **Note to Self** (for a single session) or create a **solo Signal group** (*New Group → leave members empty → Create*) for each Work session you want to pair.
+Requires Vicuna v0.0.69 or newer. Install this plugin in Vicuna (**Settings → Plugins → Install from GitHub**: `anslwy/vicuna-plugin-signal`), open a Work session and click the **Signal** bridge icon. Then pick one of two setups:
 
-> **Tip (notifications):** Because a linked device shares your own Signal account, Signal won't send push notifications for replies in *Note to Self* or solo groups. If you want push notifications and a separate "Vicuna" contact, register a dedicated number with `signal-cli` and DM it or add it to a 2-person group.
+### A. Separate Vicuna number (recommended)
+
+Vicuna shows up as its own contact, and you get push notifications for its replies and questions. You need a second number that can receive one SMS (a dual-SIM or eSIM phone is fine; VoIP numbers are often rejected).
+
+1. Solve the CAPTCHA at <https://signalcaptchas.org/registration/generate.html> and copy the `signalcaptcha://…` link (it expires within minutes).
+2. In the dialog, enter `+<number> signalcaptcha://…` and press **Continue**.
+3. Enter the 6-digit SMS code and press **Verify** (add the registration-lock PIN after the code if the number has one, or type `voice` to get a call instead). The profile name is set to **Vicuna**.
+4. Send `!pair <code>` to that number from your own Signal account, either directly or in a group with just you and Vicuna (one group per Work session).
+
+The keys live only in `~/vicuna/config/plugins/signal-cli-data`. Keep the plugin running now and then: Signal deactivates accounts that stay offline for months.
+
+### B. Link your own account
+
+1. In the dialog, type `link` and press **Continue**.
+2. On your phone, open **Signal → Settings → Linked Devices → Link New Device** and scan the QR code.
+3. Send `!pair <code>` in **Note to Self** or in a **solo Signal group** (*New Group → leave members empty → Create*) per Work session.
+
+Replies then come from your own account, so Signal sends no push notifications for them.
 
 ## Chat Commands
 
