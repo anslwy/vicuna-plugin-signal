@@ -8,14 +8,14 @@ None. On first use the plugin downloads a pinned, checksum-verified signal-cli 0
 
 ## Setup
 
-Requires Vicuna v0.0.69 or newer. Install this plugin in Vicuna (**Settings → Plugins → Install from GitHub**: `anslwy/vicuna-plugin-signal`), open a Work session and click the **Signal** bridge icon. Then pick one of two setups:
+Requires Vicuna v0.0.70 or newer (v0.0.69 works, but you paste the CAPTCHA link by hand). Install this plugin in Vicuna (**Settings → Plugins → Install from GitHub**: `anslwy/vicuna-plugin-signal`), open a Work session and click the **Signal** bridge icon. Then pick one of two setups:
 
 ### A. Separate Vicuna number (recommended)
 
 Vicuna shows up as its own contact, and you get push notifications for its replies and questions. You need a second number that can receive one SMS (a dual-SIM or eSIM phone is fine; VoIP numbers are often rejected).
 
-1. Solve the CAPTCHA at <https://signalcaptchas.org/registration/generate.html> and copy the `signalcaptcha://…` link (it expires within minutes).
-2. In the dialog, enter `+<number> signalcaptcha://…` and press **Continue**.
+1. In the dialog, enter the number with its country code and press **Continue**.
+2. Press **Solve CAPTCHA**: Vicuna opens Signal's CAPTCHA in a small window and continues by itself when you finish (in a plain browser, right-click its "Open Signal" link, copy it and paste it into the box).
 3. Enter the 6-digit SMS code and press **Verify** (add the registration-lock PIN after the code if the number has one, or type `voice` to get a call instead). The profile name is set to **Vicuna**.
 4. Send `!pair <code>` to that number from your own Signal account, either directly or in a group with just you and Vicuna (one group per Work session).
 

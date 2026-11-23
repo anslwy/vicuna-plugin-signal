@@ -1,7 +1,7 @@
 {
   "id": "signal",
   "name": "Signal",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Talk to any Vicuna Work session from Signal (Note to Self, solo groups, or DMs) via signal-cli, with QR linking, live progress, questions, attachments, and voice memos.",
   "bridge": {
     "name": "Signal",
@@ -10,18 +10,13 @@
     "authMode": "qr",
     "setupSteps": [
       {
-        "text": "Nothing to install: the first time you use it, the plugin downloads signal-cli (and a Java runtime on macOS/Windows), about 120\u2013180 MB."
+        "text": "Nothing to install: on first use the plugin downloads signal-cli (and a Java runtime on macOS/Windows), about 120\u2013180 MB."
       },
       {
-        "text": "Separate Vicuna number (recommended, you get notifications): solve the CAPTCHA at",
-        "linkText": "signalcaptchas.org",
-        "linkUrl": "https://signalcaptchas.org/registration/generate.html"
+        "text": "Separate Vicuna number (recommended, you get notifications): enter the number, press Solve CAPTCHA, then type the SMS code."
       },
       {
-        "text": "Enter the number and the copied signalcaptcha:// link below, then the SMS code."
-      },
-      {
-        "text": "Or type link to link your own account: scan the QR code in Signal \u2192 Settings \u2192 Linked Devices."
+        "text": "Or type link to use your own account: scan the QR code in Signal \u2192 Settings \u2192 Linked Devices."
       }
     ],
     "pairCommand": "!pair",

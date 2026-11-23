@@ -145,9 +145,15 @@ fn save_store(path: &Path, store: &Store) -> Result<(), String> {
 fn input_prompt(reg: &RegState) -> Value {
     match reg {
         RegState::Idle => json!({
-            "label": format!("To give Vicuna its own Signal number, enter that number with its country code and a CAPTCHA link from {CAPTCHA_URL}, separated by a space. To link your own Signal account with a QR code instead, type link."),
-            "placeholder": "+15551234567 signalcaptcha://…",
+            "label": "Phone number for Vicuna's own Signal account, with country code. (To use your own account with a QR code instead, type link.)",
+            "placeholder": "+15551234567",
             "submitLabel": "Continue",
+        }),
+        RegState::NeedCaptcha { number } => json!({
+            "label": format!("Signal needs a quick CAPTCHA before it texts a code to {number}."),
+            "placeholder": "signalcaptcha://…",
+            "submitLabel": "Continue",
+            "capture": { "url": CAPTCHA_URL, "scheme": "signalcaptcha", "label": "Solve CAPTCHA" },
         }),
         RegState::AwaitingCode { number, .. } => json!({
             "label": format!("Enter the 6-digit code Signal sent by SMS to {number}. Add the registration-lock PIN after it if the number has one, or type voice to get a phone call instead."),
@@ -160,13 +166,14 @@ fn input_prompt(reg: &RegState) -> Value {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RegState {
     Idle,
+    NeedCaptcha { number: String },
     AwaitingCode { number: String, captcha: String },
 }
 
 #[derive(Debug, PartialEq, Eq)]
 enum RegInput {
     Link,
-    Register { number: String, captcha: String },
+    Register { number: String, captcha: Option<String> },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -195,9 +202,8 @@ fn parse_register_input(s: &str) -> Result<RegInput, String> {
     let number: String = rest.chars().filter(|c| !matches!(c, '-' | '(' | ')' | '.')).collect();
     let digits = number.strip_prefix('+').unwrap_or("");
     if digits.len() < 8 || digits.len() > 15 || !digits.chars().all(|c| c.is_ascii_digit()) {
-        return Err("Enter the number with its country code, like +15551234567, followed by the CAPTCHA link.".into());
+        return Err("Enter the number with its country code, like +15551234567.".into());
     }
-    let captcha = captcha.ok_or_else(|| format!("Add the CAPTCHA link (signalcaptcha://…) from {CAPTCHA_URL} after the number."))?;
     Ok(RegInput::Register { number, captcha })
 }
 
@@ -639,9 +645,21 @@ impl AppState {
         let reg = self.reg.lock().await.clone();
         let res = match reg {
             RegState::AwaitingCode { number, captcha } => self.verify_step(&number, &captcha, input).await,
+            RegState::NeedCaptcha { number } => {
+                let captcha = input.trim();
+                if captcha.starts_with("signalcaptcha://") {
+                    self.register_step(&number, captcha, false).await
+                } else {
+                    Err("That isn't a CAPTCHA link. Press Solve CAPTCHA, or paste the signalcaptcha:// link.".into())
+                }
+            }
             RegState::Idle => match parse_register_input(input) {
                 Ok(RegInput::Link) => return self.start_qr_link(session_id).await,
-                Ok(RegInput::Register { number, captcha }) => self.register_step(&number, &captcha, false).await,
+                Ok(RegInput::Register { number, captcha: Some(captcha) }) => self.register_step(&number, &captcha, false).await,
+                Ok(RegInput::Register { number, captcha: None }) => {
+                    *self.reg.lock().await = RegState::NeedCaptcha { number };
+                    Ok(())
+                }
                 Err(e) => Err(e),
             },
         };
@@ -658,7 +676,7 @@ impl AppState {
             Duration::from_secs(60),
         )
         .await
-        .map_err(|e| format!("Signal refused the registration: {e}. CAPTCHA links expire quickly; get a fresh one and try again."))?;
+        .map_err(|e| format!("Signal refused the registration: {e}. CAPTCHAs expire within minutes: press Solve CAPTCHA again."))?;
         *self.reg.lock().await = RegState::AwaitingCode { number: number.into(), captcha: captcha.into() };
         Ok(())
     }
@@ -800,8 +818,7 @@ impl AppState {
         } else if store.account.is_none() {
             let mut prompt = input_prompt(&reg);
             if let Some(note) = self.runtime_note() {
-                let label = prompt["label"].as_str().unwrap_or_default().to_string();
-                prompt["label"] = Value::String(format!("{note}\n\n{label}"));
+                prompt["note"] = Value::String(note);
             }
             obj["inputPrompt"] = prompt;
         }
@@ -1858,13 +1875,13 @@ mod tests {
         assert_eq!(parse_register_input(" link "), Ok(RegInput::Link));
         assert_eq!(
             parse_register_input("+1 555-123-4567 signalcaptcha://abc.def"),
-            Ok(RegInput::Register { number: "+15551234567".into(), captcha: "signalcaptcha://abc.def".into() })
+            Ok(RegInput::Register { number: "+15551234567".into(), captcha: Some("signalcaptcha://abc.def".into()) })
         );
         assert_eq!(
             parse_register_input("signalcaptcha://x +447700900123"),
-            Ok(RegInput::Register { number: "+447700900123".into(), captcha: "signalcaptcha://x".into() })
+            Ok(RegInput::Register { number: "+447700900123".into(), captcha: Some("signalcaptcha://x".into()) })
         );
-        assert!(parse_register_input("+15551234567").is_err());
+        assert_eq!(parse_register_input("+15551234567"), Ok(RegInput::Register { number: "+15551234567".into(), captcha: None }));
         assert!(parse_register_input("5551234567 signalcaptcha://x").is_err());
         assert!(parse_register_input("+12 signalcaptcha://x").is_err());
     }
@@ -1882,6 +1899,9 @@ mod tests {
     fn input_prompt_follows_registration_step() {
         let a = input_prompt(&RegState::Idle);
         assert!(a["label"].as_str().unwrap().contains("type link"));
+        let c = input_prompt(&RegState::NeedCaptcha { number: "+15551234567".into() });
+        assert_eq!(c["capture"]["scheme"], "signalcaptcha");
+        assert_eq!(c["capture"]["url"], CAPTCHA_URL);
         let b = input_prompt(&RegState::AwaitingCode { number: "+15551234567".into(), captcha: "c".into() });
         assert!(b["label"].as_str().unwrap().contains("+15551234567"));
         assert_eq!(b["submitLabel"], "Verify");
