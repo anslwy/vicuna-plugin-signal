@@ -1,0 +1,18 @@
+[package]
+name = "vicuna-bridge-signal"
+version = "0.1.0"
+edition = "2021"
+description = "Signal bridge plugin for Vicuna via signal-cli"
+
+[dependencies]
+base64 = "0.22"
+getrandom = "0.3"
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "io-std", "fs", "process", "sync", "time"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true

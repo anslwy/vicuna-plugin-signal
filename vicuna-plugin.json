@@ -1,0 +1,35 @@
+{
+  "id": "signal",
+  "name": "Signal",
+  "version": "0.1.0",
+  "description": "Talk to any Vicuna Work session from Signal (Note to Self, solo groups, or DMs) via signal-cli, with QR linking, live progress, questions, attachments, and voice memos.",
+  "bridge": {
+    "name": "Signal",
+    "color": "#3a76f0",
+    "iconPath": "M12 2C6.477 2 2 6.145 2 11.259c0 2.86 1.404 5.418 3.606 7.118L4.4 22l4.02-1.74c1.11.335 2.313.518 3.58.518 5.523 0 10-4.145 10-9.259C22 6.145 17.523 2 12 2z",
+    "authMode": "qr",
+    "setupSteps": [
+      {
+        "text": "Install signal-cli (e.g. brew install signal-cli on macOS) from",
+        "linkText": "AsamK/signal-cli",
+        "linkUrl": "https://github.com/AsamK/signal-cli"
+      },
+      {
+        "text": "Click Link Signal device below to generate a QR code."
+      },
+      {
+        "text": "In Signal on your phone, open Settings → Linked Devices → Link New Device and scan the QR code."
+      }
+    ],
+    "pairCommand": "!pair",
+    "supportsVoice": true,
+    "entrypoint": "target/release/vicuna-bridge-signal",
+    "binaries": {
+      "linux-x86_64": "vicuna-bridge-signal-linux-x86_64",
+      "linux-aarch64": "vicuna-bridge-signal-linux-aarch64",
+      "macos-aarch64": "vicuna-bridge-signal-macos-aarch64",
+      "macos-x86_64": "vicuna-bridge-signal-macos-x86_64",
+      "windows-x86_64": "vicuna-bridge-signal-windows-x86_64.exe"
+    }
+  }
+}
