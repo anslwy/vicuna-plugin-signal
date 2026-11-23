@@ -8,7 +8,7 @@ None. On first use the plugin downloads a pinned, checksum-verified signal-cli 0
 
 ## Setup
 
-Requires Vicuna v0.0.70 or newer (v0.0.69 works, but you paste the CAPTCHA link by hand). Install this plugin in Vicuna (**Settings → Plugins → Install from GitHub**: `anslwy/vicuna-plugin-signal`), open a Work session and click the **Signal** bridge icon. Then pick one of two setups:
+Requires Vicuna v0.0.72 or newer (v0.0.69–v0.0.71 work, but you paste the CAPTCHA link by hand). Install this plugin in Vicuna (**Settings → Plugins → Install from GitHub**: `anslwy/vicuna-plugin-signal`), open a Work session and click the **Signal** bridge icon. Then pick one of two setups:
 
 ### A. Separate Vicuna number (recommended)
 
