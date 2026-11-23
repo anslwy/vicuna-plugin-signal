@@ -1,7 +1,7 @@
 {
   "id": "signal",
   "name": "Signal",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Talk to any Vicuna Work session from Signal (Note to Self, solo groups, or DMs) via signal-cli, with QR linking, live progress, questions, attachments, and voice memos.",
   "bridge": {
     "name": "Signal",
@@ -10,9 +10,7 @@
     "authMode": "qr",
     "setupSteps": [
       {
-        "text": "Install signal-cli (e.g. brew install signal-cli on macOS) from",
-        "linkText": "AsamK/signal-cli",
-        "linkUrl": "https://github.com/AsamK/signal-cli"
+        "text": "Nothing to install: the first time you use it, the plugin downloads signal-cli (and a Java runtime on macOS/Windows), about 120\u2013180 MB."
       },
       {
         "text": "Separate Vicuna number (recommended, you get notifications): solve the CAPTCHA at",

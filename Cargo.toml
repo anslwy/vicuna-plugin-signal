@@ -1,6 +1,6 @@
 [package]
 name = "vicuna-bridge-signal"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "Signal bridge plugin for Vicuna via signal-cli"
 
@@ -10,6 +10,7 @@ getrandom = "0.3"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "io-std", "fs", "process", "sync", "time"] }
 
 [profile.release]

@@ -5,6 +5,8 @@
 //! link a Signal account via QR code and route chats (Note to Self, solo groups,
 //! or DMs) to individual Vicuna Work sessions.
 
+mod runtime;
+
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -415,6 +417,8 @@ struct AppState {
     proc: Mutex<Option<Arc<SignalProc>>>,
     qr_data_url: Mutex<Option<String>>,
     reg: Mutex<RegState>,
+    rt_status: Arc<std::sync::Mutex<runtime::Status>>,
+    rt_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     last_error: Mutex<String>,
     linking_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     turns: Mutex<HashMap<String, ActiveTurn>>,
@@ -423,6 +427,46 @@ struct AppState {
 }
 
 impl AppState {
+    /// SIGNAL_CLI_BIN, then the managed runtime, then a system signal-cli.
+    fn resolve_runtime(&self) -> Option<runtime::Runtime> {
+        let explicit = std::env::var("SIGNAL_CLI_BIN").map(|v| !v.trim().is_empty()).unwrap_or(false);
+        if !explicit {
+            if let Some(rt) = runtime::installed(&runtime::root(&self.data_dir)) {
+                return Some(rt);
+            }
+        }
+        find_signal_cli().map(|bin| runtime::Runtime { bin, java_home: None })
+    }
+
+    fn runtime_note(&self) -> Option<String> {
+        self.rt_status.lock().ok().and_then(|s| s.describe())
+    }
+
+    /// Start the one-time signal-cli download unless it's running or done.
+    async fn start_runtime_download(self: &Arc<Self>) {
+        let mut task = self.rt_task.lock().await;
+        if task.as_ref().is_some_and(|t| !t.is_finished()) {
+            return;
+        }
+        if let Ok(mut s) = self.rt_status.lock() {
+            *s = runtime::Status::Downloading { label: "signal-cli", done: 0, total: 0 };
+        }
+        let root = runtime::root(&self.data_dir);
+        let status = self.rt_status.clone();
+        *task = Some(tokio::spawn(async move {
+            let report = |s: runtime::Status| {
+                if let Ok(mut g) = status.lock() {
+                    *g = s;
+                }
+            };
+            let res = runtime::install(&root, &report).await;
+            report(match res {
+                Ok(_) => runtime::Status::Ready,
+                Err(e) => runtime::Status::Failed(e),
+            });
+        }));
+    }
+
     async fn ensure_daemon(self: &Arc<Self>) -> Result<Arc<SignalProc>, String> {
         {
             let guard = self.proc.lock().await;
@@ -433,11 +477,13 @@ impl AppState {
             }
         }
 
-        let Some(bin) = find_signal_cli() else {
-            let msg = "signal-cli not found on PATH. Install it (e.g. `brew install signal-cli`) or set SIGNAL_CLI_BIN.".to_string();
-            *self.last_error.lock().await = msg.clone();
-            return Err(msg);
+        let Some(rt) = self.resolve_runtime() else {
+            self.start_runtime_download().await;
+            return Err(self
+                .runtime_note()
+                .unwrap_or_else(|| "Signal is still being set up. Try again when the download finishes.".into()));
         };
+        let bin = rt.bin.clone();
 
         std::fs::create_dir_all(&self.data_dir)
             .map_err(|e| format!("mkdir {}: {e}", self.data_dir.display()))?;
@@ -450,6 +496,16 @@ impl AppState {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);
+        if let Some(home) = &rt.java_home {
+            cmd.env("JAVA_HOME", home);
+            let mut paths = vec![home.join("bin")];
+            if let Some(p) = std::env::var_os("PATH") {
+                paths.extend(std::env::split_paths(&p));
+            }
+            if let Ok(joined) = std::env::join_paths(paths) {
+                cmd.env("PATH", joined);
+            }
+        }
         #[cfg(windows)]
         {
             cmd.creation_flags(0x0800_0000);
@@ -742,7 +798,12 @@ impl AppState {
         if let Some(q) = qr {
             obj["qrDataUrl"] = Value::String(q);
         } else if store.account.is_none() {
-            obj["inputPrompt"] = input_prompt(&reg);
+            let mut prompt = input_prompt(&reg);
+            if let Some(note) = self.runtime_note() {
+                let label = prompt["label"].as_str().unwrap_or_default().to_string();
+                prompt["label"] = Value::String(format!("{note}\n\n{label}"));
+            }
+            obj["inputPrompt"] = prompt;
         }
         obj
     }
@@ -1583,6 +1644,8 @@ async fn main() {
         proc: Mutex::new(None),
         qr_data_url: Mutex::new(None),
         reg: Mutex::new(RegState::Idle),
+        rt_status: Arc::new(std::sync::Mutex::new(runtime::Status::Idle)),
+        rt_task: Mutex::new(None),
         last_error: Mutex::new(String::new()),
         linking_task: Mutex::new(None),
         turns: Mutex::new(HashMap::new()),

@@ -4,11 +4,7 @@ Talk to any [Vicuna](https://github.com/anslwy/vicuna) Work session from **Signa
 
 ## Prerequisites
 
-Install `signal-cli` and make sure it is available on your `PATH` (or set `SIGNAL_CLI_BIN` to its path):
-
-- **macOS (Homebrew):** `brew install signal-cli`
-- **Linux / Windows:** download a release from [AsamK/signal-cli](https://github.com/AsamK/signal-cli/releases) (requires Java 21+ or the native GraalVM build).
-- **Optional (voice memos):** Signal mobile apps send voice notes as AAC (`.m4a`). If `ffmpeg` is on your `PATH`, the plugin automatically transcodes voice memos to OGG/Opus for Vicuna's built-in Whisper transcription; otherwise voice memos are staged as file attachments.
+None. On first use the plugin downloads a pinned, checksum-verified signal-cli 0.14.10 into `~/vicuna/config/plugins/signal-runtime/`: the native build on Linux x86_64, or the Java build plus an Eclipse Temurin 25 JRE on macOS and Windows (about 120–180 MB, once). Linux aarch64 has no ready-made build: install signal-cli yourself. `SIGNAL_CLI_BIN` overrides the choice; an existing system signal-cli is used when the managed one isn't installed.
 
 ## Setup
 
